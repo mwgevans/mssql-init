@@ -1,0 +1,75 @@
+name: Release
+
+on:
+  workflow_run:
+    workflows:
+      - "Build"
+    branches:
+      - main
+    types:
+      - completed
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v2
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v2
+      - name: Bump version and push tag
+        id: version_bump
+        uses: anothrNick/github-tag-action@1.61.0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          DEFAULT_BRANCH: main
+          DEFAULT_BUMP: patch
+          WITH_V: true
+      - if: steps.version_bump.outputs.new_tag != steps.version_bump.outputs.old_tag
+        name: Docker meta
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          # list of Docker images to use as base name for tags
+          images: |
+            ${{ github.repository }}
+          # ghcr.io/username/app            
+          # generate Docker tags based on the following events/attributes
+          tags: |
+            # set latest tag for master branch
+            type=raw,value=latest,enable=${{ github.ref == format('refs/heads/{0}', 'main') }}
+            type=schedule
+            type=ref,event=branch
+            type=ref,event=pr
+            type=semver,pattern={{version}},value=${{ steps.version_bump.outputs.new_tag }}
+            type=semver,pattern={{major}}.{{minor}},value=${{ steps.version_bump.outputs.new_tag }}
+            type=semver,pattern={{major}},value=${{ steps.version_bump.outputs.new_tag }}
+            type=sha  
+      - if: steps.version_bump.outputs.new_tag != steps.version_bump.outputs.old_tag
+        name: Login to Docker Hub
+        uses: docker/login-action@v2
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+      - if: steps.version_bump.outputs.new_tag != steps.version_bump.outputs.old_tag
+        name: Build and push
+        uses: docker/build-push-action@v4
+        with:
+          platforms: linux/amd64,linux/arm64
+          context: ./${{ github.event.repository.name }}
+          tags: ${{ steps.meta.outputs.tags }}
+          #labels: ${{ steps.meta.outputs.labels }}
+          push: true
+      - if: steps.version_bump.outputs.new_tag != steps.version_bump.outputs.old_tag
+        name: Docker Hub Description
+        uses: peter-evans/dockerhub-description@v4
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+          short-description: ${{ github.event.repository.description }}
